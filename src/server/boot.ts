@@ -7,6 +7,7 @@ import { config } from 'dotenv';
 import express from 'express';
 import echoModule from '../tools/echo.js';
 import workoutPlanModule from '../tools/workout-plan.js';
+import supplementModule from '../tools/supplement-recommendations.js';
 
 type TransportMode = 'stdio' | 'http';
 
@@ -32,6 +33,7 @@ export async function boot(mode?: TransportMode): Promise<void> {
   console.error('Registering modules...');
   await echoModule.register(server);
   await workoutPlanModule.register(server);
+  await supplementModule.register(server);
   console.error('Registration complete: 2 tools registered (echo, generate_workout_plan)');
 
   if (transportMode === 'stdio') {
