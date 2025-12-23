@@ -4,7 +4,7 @@
     "target": "ES2022",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "./build",
+    "outDir": "dist",
     "rootDir": "./src",
     "esModuleInterop": true,
     "skipLibCheck": true,

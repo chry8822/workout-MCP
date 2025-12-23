@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "npm run build && node dev",
-    "start": "node build/index.js"
+    "start": "node dist/server/boot.js"
   },
   "keywords": [
     "mcp",
@@ -22,17 +22,19 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.20.2",
+    "body-parser": "^2.2.1",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",
-    "express": "^5.1.0",
+    "express": "^5.2.1",
     "fast-glob": "^3.3.3",
     "zod": "^3.25.0",
     "zod-to-json-schema": "^3.25.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.38.0",
+    "@types/body-parser": "^1.19.6",
     "@types/cors": "^2.8.19",
-    "@types/express": "^5.0.4",
+    "@types/express": "^5.0.6",
     "@types/node": "^24.9.1",
     "@typescript-eslint/parser": "^8.46.2",
     "eslint": "^9.38.0",
@@ -44,9 +46,9 @@
     "typescript-eslint": "^8.46.2"
   },
   "bin": {
-    "mcp-hello-world": "./build/index.js"
+    "mcp-hello-world": "./dist/index.js"
   },
   "files": [
-    "build"
+    "dist"
   ]
 }

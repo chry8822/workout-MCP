@@ -8,6 +8,9 @@ import express from 'express';
 import echoModule from '../tools/echo.js';
 import workoutPlanModule from '../tools/workout-plan.js';
 import supplementModule from '../tools/supplement-recommendations.js';
+import naverShoppingModule from '../tools/naver-shopping.js';
+import kakaoLocalModule from '../tools/kakao-local.js';
+import conciergeModule from '../tools/fitness-concierge.js';
 
 type TransportMode = 'stdio' | 'http';
 
@@ -34,7 +37,12 @@ export async function boot(mode?: TransportMode): Promise<void> {
   await echoModule.register(server);
   await workoutPlanModule.register(server);
   await supplementModule.register(server);
-  console.error('Registration complete: 2 tools registered (echo, generate_workout_plan)');
+  await naverShoppingModule.register(server);
+  await kakaoLocalModule.register(server);
+  await conciergeModule.register(server);
+  console.error(
+    'Registration complete: tools registered (echo, generate_workout_plan, supplement_recommendations, naver_shop_search, naver_shop_price_compare, kakao_geocode, kakao_place_search, kakao_find_nearby_gyms, find_supplement_deals_and_nearby_gyms)'
+  );
 
   if (transportMode === 'stdio') {
     const transport = new StdioServerTransport();
