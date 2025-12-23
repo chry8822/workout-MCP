@@ -7,7 +7,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "npm run build && node dev",
-    "start": "node dist/server/boot.js"
+    "start": "node dist/index.js"
   },
   "keywords": [
     "mcp",
