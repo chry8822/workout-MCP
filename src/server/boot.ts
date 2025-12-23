@@ -94,6 +94,23 @@ export async function boot(mode?: TransportMode): Promise<void> {
 
   // Handle all MCP requests (GET for SSE, POST for JSON-RPC, DELETE for cleanup)
   app.all('/mcp', (req, res) => {
+    // StreamableHTTPServerTransport는 client의 Accept 헤더가
+    // "application/json" 과 "text/event-stream" 을 모두 포함하길 요구합니다.
+    // 일부 웹 클라이언트(카카오Play 포함)가 application/json 만 보내는 경우가 있어 406이 발생할 수 있어,
+    // POST/DELETE 요청에 한해 Accept 헤더를 보정해 호환성을 높입니다.
+    if (req.method === 'POST' || req.method === 'DELETE') {
+      const accept = (req.headers.accept ?? '').toString();
+      const hasJson = accept.toLowerCase().includes('application/json');
+      const hasSse = accept.toLowerCase().includes('text/event-stream');
+      if (!hasJson || !hasSse) {
+        const parts = new Set<string>();
+        if (hasJson) parts.add(accept);
+        else if (accept.trim().length > 0) parts.add(accept);
+        parts.add('application/json');
+        parts.add('text/event-stream');
+        req.headers.accept = Array.from(parts).join(', ');
+      }
+    }
     void transport.handleRequest(req, res, req.body);
   });
 
