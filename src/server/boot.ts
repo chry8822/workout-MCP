@@ -20,12 +20,11 @@ config();
 export async function boot(mode?: TransportMode): Promise<void> {
   // Render/호스팅 환경은 "장기 실행 HTTP 서버"가 기본 기대값입니다.
   // STARTER_TRANSPORT가 명시되지 않았고 PORT/RENDER 환경이 보이면 http를 기본으로 선택합니다.
-  const inferredDefault: TransportMode =
-    process.env.STARTER_TRANSPORT
-      ? ((process.env.STARTER_TRANSPORT as TransportMode | undefined) ?? 'stdio')
-      : process.env.RENDER || process.env.PORT
-        ? 'http'
-        : 'stdio';
+  const inferredDefault: TransportMode = process.env.STARTER_TRANSPORT
+    ? (process.env.STARTER_TRANSPORT as TransportMode | undefined) ?? 'stdio'
+    : process.env.RENDER || process.env.PORT
+    ? 'http'
+    : 'stdio';
 
   const transportMode = mode ?? inferredDefault;
   const server = new McpServer({
@@ -66,12 +65,22 @@ export async function boot(mode?: TransportMode): Promise<void> {
   app.use(express.json({ limit: '1mb' }));
 
   const corsOrigin = process.env.CORS_ORIGIN ?? '*';
+  const allowCredentials = corsOrigin !== '*';
   app.use(
     cors({
       origin: corsOrigin,
-      credentials: true,
+      // 브라우저 CORS 규칙: credentials=true 인 경우 origin="*" 는 허용되지 않습니다.
+      credentials: allowCredentials,
       methods: ['GET', 'POST', 'OPTIONS', 'DELETE'],
-      allowedHeaders: ['Content-Type', 'x-mcp-session', 'x-mcp-session-id'],
+      allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'x-mcp-session',
+        'x-mcp-session-id',
+        // 일부 클라이언트가 대소문자/변형을 쓰는 경우를 대비
+        'X-MCP-Session',
+        'X-MCP-Session-Id',
+      ],
       exposedHeaders: ['x-mcp-session-id'],
     })
   );
