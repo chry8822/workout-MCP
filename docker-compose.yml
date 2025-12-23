@@ -37,7 +37,7 @@ services:
       - "3001:3001"
     volumes:
       - ./src:/app/src
-      - ./build:/app/build
+      - ./dist:/app/dist
     command: ["npm", "run", "serve:http"]
     profiles:
       - dev

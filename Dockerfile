@@ -21,10 +21,9 @@ ENV STARTER_TRANSPORT=http
 ENV PORT=3000
 
 # Copy built files and production dependencies
-COPY --from=build /app/build ./build
+COPY --from=build /app/dist ./dist
 COPY --from=build /app/package*.json ./
 COPY --from=build /app/mcp.json ./
-COPY --from=build /app/.vscode/mcp.json ./.vscode/
 
 # Install only production dependencies
 RUN npm ci --omit=dev
@@ -42,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD node -e "require('http').get('http://localhost:3000/mcp', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})" || exit 1
 
 # Start the server
-CMD ["node", "build/index.js"]
+CMD ["node", "dist/server/boot.js"]

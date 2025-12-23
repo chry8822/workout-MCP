@@ -18,7 +18,16 @@ type TransportMode = 'stdio' | 'http';
 config();
 
 export async function boot(mode?: TransportMode): Promise<void> {
-  const transportMode = mode ?? (process.env.STARTER_TRANSPORT as TransportMode | undefined) ?? 'stdio';
+  // Render/호스팅 환경은 "장기 실행 HTTP 서버"가 기본 기대값입니다.
+  // STARTER_TRANSPORT가 명시되지 않았고 PORT/RENDER 환경이 보이면 http를 기본으로 선택합니다.
+  const inferredDefault: TransportMode =
+    process.env.STARTER_TRANSPORT
+      ? ((process.env.STARTER_TRANSPORT as TransportMode | undefined) ?? 'stdio')
+      : process.env.RENDER || process.env.PORT
+        ? 'http'
+        : 'stdio';
+
+  const transportMode = mode ?? inferredDefault;
   const server = new McpServer({
     name: 'fitness-nutrition-mcp',
     version: '1.0.0',
@@ -43,6 +52,7 @@ export async function boot(mode?: TransportMode): Promise<void> {
   console.error(
     'Registration complete: tools registered (echo, generate_workout_plan, supplement_recommendations, naver_shop_search, naver_shop_price_compare, kakao_geocode, kakao_place_search, kakao_find_nearby_gyms, find_supplement_deals_and_nearby_gyms)'
   );
+  console.error(`Transport mode: ${transportMode}`);
 
   if (transportMode === 'stdio') {
     const transport = new StdioServerTransport();
