@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { RegisterableModule } from '../registry/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { fetchJson, safeString } from './_http.js';
+import { fetchJson, safeString, HttpError } from './_http.js';
 
 type KakaoPlace = {
   id: string;
@@ -32,13 +32,31 @@ function toNumber(v: unknown): number | undefined {
 
 async function kakaoGet<T>(url: URL): Promise<T> {
   const key = requireEnv('KAKAO_REST_API_KEY');
-  const json = await fetchJson(url.toString(), {
-    headers: {
-      Authorization: `KakaoAK ${key}`,
-    },
-    timeoutMs: 9000,
-  });
-  return json as unknown as T;
+  try {
+    const json = await fetchJson(url.toString(), {
+      headers: {
+        Authorization: `KakaoAK ${key}`,
+      },
+      timeoutMs: 9000,
+    });
+    return json as unknown as T;
+  } catch (e: unknown) {
+    if (e instanceof HttpError) {
+      const body = (e.bodyText ?? '').trim();
+      const bodyPreview = body.length > 2000 ? `${body.slice(0, 2000)}... (truncated)` : body;
+      // 키/토큰 같은 민감정보는 body에 없지만, 혹시 모를 누출을 방지하기 위해 Authorization 값은 절대 포함하지 않음
+      throw new Error(
+        [
+          `Kakao API HTTP ${String(e.status)} 요청 실패`,
+          `url=${e.url}`,
+          bodyPreview.length ? `body=${bodyPreview}` : '',
+        ]
+          .filter(Boolean)
+          .join('\n')
+      );
+    }
+    throw e;
+  }
 }
 
 async function geocodeTextToCoord(location: string): Promise<{ x: number; y: number; source: 'address' | 'keyword' }> {
