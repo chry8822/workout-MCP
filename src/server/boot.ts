@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js';
 import cors from 'cors';
 import { config } from 'dotenv';
 import express from 'express';
@@ -27,33 +28,36 @@ export async function boot(mode?: TransportMode): Promise<void> {
     : 'stdio';
 
   const transportMode = mode ?? inferredDefault;
-  const server = new McpServer({
-    name: 'fitness-nutrition-mcp',
-    version: '1.0.0',
-    capabilities: {
-      tools: {},
-      resources: {},
-      prompts: {},
-      completions: {},
-    },
-  });
 
-  // await autoRegisterModules(server); // ← 주석 처리하고 아래로 교체
+  async function createAndRegisterServer(): Promise<McpServer> {
+    const s = new McpServer({
+      name: 'fitness-nutrition-mcp',
+      version: '1.0.0',
+      capabilities: {
+        tools: {},
+        resources: {},
+        prompts: {},
+        completions: {},
+      },
+    });
 
-  // 직접 등록
-  console.error('Registering modules...');
-  await echoModule.register(server);
-  await workoutPlanModule.register(server);
-  await supplementModule.register(server);
-  await naverShoppingModule.register(server);
-  await kakaoLocalModule.register(server);
-  await conciergeModule.register(server);
-  console.error(
-    'Registration complete: tools registered (echo, generate_workout_plan, supplement_recommendations, naver_shop_search, naver_shop_price_compare, kakao_geocode, kakao_place_search, kakao_find_nearby_gyms, find_supplement_deals_and_nearby_gyms)'
-  );
+    console.error('Registering modules...');
+    await echoModule.register(s);
+    await workoutPlanModule.register(s);
+    await supplementModule.register(s);
+    await naverShoppingModule.register(s);
+    await kakaoLocalModule.register(s);
+    await conciergeModule.register(s);
+    console.error(
+      'Registration complete: tools registered (echo, generate_workout_plan, supplement_recommendations, naver_shop_search, naver_shop_price_compare, kakao_geocode, kakao_place_search, kakao_find_nearby_gyms, find_supplement_deals_and_nearby_gyms)'
+    );
+    return s;
+  }
+
   console.error(`Transport mode: ${transportMode}`);
 
   if (transportMode === 'stdio') {
+    const server = await createAndRegisterServer();
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error('Fitness Nutrition MCP Server running on stdio');
@@ -75,45 +79,93 @@ export async function boot(mode?: TransportMode): Promise<void> {
       allowedHeaders: [
         'Content-Type',
         'Authorization',
+        'mcp-session-id',
+        'Mcp-Session-Id',
         'x-mcp-session',
         'x-mcp-session-id',
         // 일부 클라이언트가 대소문자/변형을 쓰는 경우를 대비
         'X-MCP-Session',
         'X-MCP-Session-Id',
       ],
-      exposedHeaders: ['x-mcp-session-id'],
+      exposedHeaders: ['mcp-session-id', 'x-mcp-session-id', 'x-mcp-session', 'Mcp-Session-Id', 'X-MCP-Session-Id'],
     })
   );
 
-  // Create transport with session support
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: () => randomUUID(),
-  });
+  type SessionEntry = { transport: StreamableHTTPServerTransport; server: McpServer };
+  const sessions: Record<string, SessionEntry> = {};
 
-  await server.connect(transport);
+  function getSessionIdFromHeaders(req: express.Request): string | undefined {
+    // Node/Express는 기본적으로 헤더 키를 소문자로 정규화합니다.
+    const h = req.headers;
+    return (h['mcp-session-id'] as string | undefined) ?? (h['x-mcp-session-id'] as string | undefined) ?? (h['x-mcp-session'] as string | undefined);
+  }
 
-  // Handle all MCP requests (GET for SSE, POST for JSON-RPC, DELETE for cleanup)
-  app.all('/mcp', (req, res) => {
-    // StreamableHTTPServerTransport는 client의 Accept 헤더가
-    // "application/json" 과 "text/event-stream" 을 모두 포함하길 요구합니다.
-    // 일부 웹 클라이언트(카카오Play 포함)가 application/json 만 보내는 경우가 있어 406이 발생할 수 있어,
-    // GET/POST/DELETE 모두에서 Accept 헤더를 보정해 호환성을 높입니다.
-    // (정보 불러오기/상태 체크가 GET으로 들어오는 클라이언트도 있어 POST만 보정하면 여전히 실패할 수 있음)
+  // 일부 클라이언트(카카오Play 포함)가 Accept: application/json 만 보내는 경우가 있어 406이 발생할 수 있어,
+  // /mcp 경로는 모든 메서드에서 Accept를 보정합니다.
+  app.use('/mcp', (req, _res, next) => {
     const rawAccept = (req.headers.accept ?? '').toString();
     const acceptLower = rawAccept.toLowerCase();
     const hasJson = acceptLower.includes('application/json');
     const hasSse = acceptLower.includes('text/event-stream');
 
     if (!hasJson || !hasSse) {
-      const parts: string[] = [];
-      parts.push('application/json');
-      parts.push('text/event-stream');
-      if (rawAccept.trim().length > 0) parts.push(rawAccept);
-      else parts.push('*/*');
-      req.headers.accept = parts.join(', ');
+      req.headers.accept = 'application/json, text/event-stream';
     }
-    void transport.handleRequest(req, res, req.body);
+
+    next();
   });
+
+  // 상태 체크(일부 클라이언트가 HEAD로 online 판단)
+  app.head('/mcp', (_req, res) => {
+    res.status(200).end();
+  });
+
+  // POST: initialize + JSON-RPC 요청 처리
+  app.post('/mcp', async (req, res) => {
+    const sessionId = getSessionIdFromHeaders(req);
+    let entry = sessionId ? sessions[sessionId] : undefined;
+
+    if (!entry && !sessionId && isInitializeRequest(req.body)) {
+      const server = await createAndRegisterServer();
+      const transport = new StreamableHTTPServerTransport({
+        sessionIdGenerator: () => randomUUID(),
+        onsessioninitialized: (sid) => {
+          sessions[sid] = { transport, server };
+        },
+      });
+
+      transport.onclose = () => {
+        if (transport.sessionId) delete sessions[transport.sessionId];
+      };
+
+      await server.connect(transport);
+      entry = { transport, server };
+    }
+
+    if (!entry) {
+      res.status(400).json({
+        jsonrpc: '2.0',
+        error: { code: -32000, message: 'Bad Request: No valid session ID provided' },
+        id: null,
+      });
+      return;
+    }
+
+    await entry.transport.handleRequest(req, res, req.body);
+  });
+
+  // GET/DELETE: 세션이 있어야 처리 가능 (SSE, 세션 종료 등)
+  const handleSessionRequest = async (req: express.Request, res: express.Response) => {
+    const sessionId = getSessionIdFromHeaders(req);
+    if (!sessionId || !sessions[sessionId]) {
+      res.status(400).send('Invalid or missing session ID');
+      return;
+    }
+    await sessions[sessionId].transport.handleRequest(req, res);
+  };
+
+  app.get('/mcp', handleSessionRequest);
+  app.delete('/mcp', handleSessionRequest);
 
   const port = Number(process.env.PORT ?? 3000);
   const httpServer = app.listen(port, () => {
@@ -125,7 +177,14 @@ export async function boot(mode?: TransportMode): Promise<void> {
 
   process.on('SIGINT', () => {
     console.log('Shutting down HTTP server...');
-    void transport.close();
+    for (const sid of Object.keys(sessions)) {
+      try {
+        const entry = sessions[sid];
+        if (entry) void entry.transport.close();
+      } catch {
+        // ignore
+      }
+    }
     httpServer.close(() => {
       process.exit(0);
     });
