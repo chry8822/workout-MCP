@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { RegisterableModule } from '../registry/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { sampleText, tryParseJson } from './_ai.js';
 
 // 타입 정의
 type ExerciseItem = {
@@ -395,11 +396,86 @@ const workoutPlanModule: RegisterableModule = {
     - arms: 팔
     - core: 코어
     예시: ["chest", "back"]`),
+
+        aiAssist: z.boolean().optional().describe('[선택] AI 보조 설명/대체동작/진행 가이드를 추가합니다. (기본 false)'),
+        aiDetail: z.enum(['brief', 'standard', 'detailed']).optional().describe('[선택] AI 설명 길이 (기본 standard)'),
+        constraints: z
+          .object({
+            injuries: z.array(z.string()).optional().describe('[선택] 통증/부상(예: "어깨", "무릎")'),
+            equipment: z.array(z.string()).optional().describe('[선택] 사용 가능한 장비(예: "덤벨", "밴드")'),
+            timeLimitMin: z.number().min(10).max(120).optional().describe('[선택] 운동 가능 시간(분)'),
+          })
+          .optional()
+          .describe('[선택] 개인 조건(AI가 설명/대체동작에만 반영, 루틴 구조는 유지)'),
       },
-      (args): { content: Array<{ type: 'text'; text: string }> } => {
-        const { goal, daysPerWeek, experienceLevel, hasGymAccess, targetBodyParts } = args;
+      async (args): Promise<{ content: Array<{ type: 'text'; text: string }> }> => {
+        const { goal, daysPerWeek, experienceLevel, hasGymAccess, targetBodyParts, aiAssist = false, aiDetail = 'standard', constraints } = args;
 
         const workouts = generateWorkoutsByGoal(goal, hasGymAccess, experienceLevel, daysPerWeek, targetBodyParts);
+
+        const base = {
+          목표: GOAL_NAMES[goal],
+          레벨: LEVEL_NAMES[experienceLevel],
+          주간_운동_횟수: `주 ${daysPerWeek}회`,
+          헬스장_이용: hasGymAccess ? '가능' : '홈트',
+          운동_루틴: workouts,
+          주의사항: generateCautions(experienceLevel, goal),
+        };
+
+        if (!aiAssist) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(base, null, 2),
+              },
+            ],
+          };
+        }
+
+        const detailHint = aiDetail === 'brief' ? '아주 짧게' : aiDetail === 'detailed' ? '상세하게' : '적당히';
+        const systemPrompt =
+          '너는 한국어 피트니스 코치다. 사용자가 안전하게 수행할 수 있도록 설명하되, 의료 조언을 하지 말고 위험하면 전문의/트레이너 상담을 권한다.';
+
+        const userText = `다음은 서버가 생성한 "고정 루틴(JSON)"이다. 이 루틴의 구조/운동명/세트/횟수는 바꾸지 말고, 설명(폼 포인트/대체 동작/진행 가이드)만 ${detailHint} 추가해줘.\n\n` +
+          `사용자 조건(있으면 반영): ${JSON.stringify(constraints ?? {}, null, 2)}\n\n` +
+          `고정 루틴(JSON):\n${JSON.stringify(base, null, 2)}\n\n` +
+          `출력은 반드시 JSON 하나로만:\n` +
+          `{\n` +
+          `  "summary": "한 줄 요약",\n` +
+          `  "formTips": ["폼/주의 포인트 3~7개"],\n` +
+          `  "substitutions": [{"from":"원운동","to":"대체운동","when":"언제 대체하는지"}],\n` +
+          `  "progression": ["2~4주 진행 가이드"],\n` +
+          `  "safety": ["부상 예방/중단 기준"]\n` +
+          `}\n`;
+
+        const sampled = await sampleText({ server, systemPrompt, userText, maxTokens: aiDetail === 'detailed' ? 1200 : 800, temperature: 0 });
+
+        if (!sampled.ok) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    ...base,
+                    aiAssist: { enabled: true, ok: false, reason: sampled.reason, message: sampled.message },
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        const parsed = tryParseJson<{
+          summary: string;
+          formTips: string[];
+          substitutions: Array<{ from: string; to: string; when: string }>;
+          progression: string[];
+          safety: string[];
+        }>(sampled.text);
 
         return {
           content: [
@@ -407,12 +483,13 @@ const workoutPlanModule: RegisterableModule = {
               type: 'text',
               text: JSON.stringify(
                 {
-                  목표: GOAL_NAMES[goal],
-                  레벨: LEVEL_NAMES[experienceLevel],
-                  주간_운동_횟수: `주 ${daysPerWeek}회`,
-                  헬스장_이용: hasGymAccess ? '가능' : '홈트',
-                  운동_루틴: workouts,
-                  주의사항: generateCautions(experienceLevel, goal),
+                  ...base,
+                  aiAssist: {
+                    enabled: true,
+                    ok: true,
+                    model: sampled.model,
+                    notes: parsed.ok ? parsed.value : { rawText: sampled.text },
+                  },
                 },
                 null,
                 2

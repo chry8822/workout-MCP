@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { RegisterableModule } from '../registry/types.js';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { sampleText, tryParseJson } from './_ai.js';
 
 type Supplement = {
   name: string;
@@ -232,9 +233,23 @@ const supplementModule: RegisterableModule = {
   • medium - 필수+권장 영양제 (월 7-12만원)
   • high - 전체 추천 (월 15-25만원)
   예시: medium`),
+
+        aiAssist: z.boolean().optional().describe('[선택] AI 보조로 복용 스케줄/구매 체크리스트/주의사항을 보강합니다. (기본 false)'),
+        aiDetail: z.enum(['brief', 'standard', 'detailed']).optional().describe('[선택] AI 설명 길이 (기본 standard)'),
+        profile: z
+          .object({
+            age: z.number().min(10).max(90).optional().describe('[선택] 나이'),
+            sex: z.enum(['male', 'female', 'other']).optional().describe('[선택] 성별'),
+            diet: z.enum(['omnivore', 'vegetarian', 'vegan']).optional().describe('[선택] 식단'),
+            allergies: z.array(z.string()).optional().describe('[선택] 알레르기(예: "유당", "갑각류")'),
+            medications: z.array(z.string()).optional().describe('[선택] 복용 약(예: "혈압약")'),
+            conditions: z.array(z.string()).optional().describe('[선택] 기저질환(예: "당뇨", "위염")'),
+          })
+          .optional()
+          .describe('[선택] 개인 정보(민감정보는 최소로 입력). AI가 “설명/주의사항”에만 반영, 추천 목록 자체는 고정 룰 기반.'),
       },
-      (args): { content: Array<{ type: 'text'; text: string }> } => {
-        const { goal, trainingFrequency, hasJointIssue, needsRecovery, budget = 'medium' } = args;
+      async (args): Promise<{ content: Array<{ type: 'text'; text: string }> }> => {
+        const { goal, trainingFrequency, hasJointIssue, needsRecovery, budget = 'medium', aiAssist = false, aiDetail = 'standard', profile } = args;
 
         let supplements = getBaseSupplements(goal);
 
@@ -283,21 +298,88 @@ const supplementModule: RegisterableModule = {
           high: '15-25만원',
         };
 
+        const base = {
+          목표: GOAL_NAMES[goal],
+          주간_운동_횟수: `주 ${trainingFrequency}회`,
+          관절_상태: hasJointIssue ? '문제 있음 (관절 영양제 포함)' : '정상',
+          피로_상태: needsRecovery ? '피로 누적 (회복 영양제 포함)' : '양호',
+          예산_수준: budgetMap[budget],
+          추천_영양제_개수: supplements.length,
+          추천_영양제: supplements,
+          주의사항: warnings,
+          월_예상_비용: costMap[budget],
+        };
+
+        if (!aiAssist) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(base, null, 2),
+              },
+            ],
+          };
+        }
+
+        const detailHint = aiDetail === 'brief' ? '아주 짧게' : aiDetail === 'detailed' ? '상세하게' : '적당히';
+        const systemPrompt =
+          '너는 한국어 영양/운동 보조 코치다. 의학적 진단/처방은 하지 말고, 약 복용/기저질환/임신수유 등은 의료진 상담을 권한다. 제품 효능을 과장하지 말고, 서버가 제공한 추천 목록(성분/종류)을 벗어난 새로운 영양제를 추가 추천하지 마라.';
+
+        const userText =
+          `아래는 서버가 생성한 "고정 추천 목록(JSON)"이다. 추천 목록 자체(영양제 종류/용량/타이밍)는 바꾸지 말고, ${detailHint}로 다음을 만들어줘:\n` +
+          `- 하루 복용 스케줄(아침/점심/운동 전후/취침)\n` +
+          `- 구매 체크리스트(함량/인증/첨가물/가성비)\n` +
+          `- profile(알레르기/약/질환)가 있으면 주의사항만 더 강화\n\n` +
+          `사용자 프로필(있으면 반영): ${JSON.stringify(profile ?? {}, null, 2)}\n\n` +
+          `고정 추천 목록(JSON):\n${JSON.stringify(base, null, 2)}\n\n` +
+          `출력은 반드시 JSON 하나로만:\n` +
+          `{\n` +
+          `  "schedule": [{"time":"아침|점심|운동전|운동후|저녁|취침","items":["영양제명"],"note":"짧은 팁"}],\n` +
+          `  "buyChecklist": ["체크리스트 5~10개"],\n` +
+          `  "cautionsExtra": ["추가 주의사항(있을 때만)"],\n` +
+          `  "oneLine": "한 줄 요약"\n` +
+          `}\n`;
+
+        const sampled = await sampleText({ server, systemPrompt, userText, maxTokens: aiDetail === 'detailed' ? 1200 : 800, temperature: 0 });
+
+        if (!sampled.ok) {
+          return {
+            content: [
+              {
+                type: 'text',
+                text: JSON.stringify(
+                  {
+                    ...base,
+                    aiAssist: { enabled: true, ok: false, reason: sampled.reason, message: sampled.message },
+                  },
+                  null,
+                  2
+                ),
+              },
+            ],
+          };
+        }
+
+        const parsed = tryParseJson<{
+          schedule: Array<{ time: string; items: string[]; note?: string }>;
+          buyChecklist: string[];
+          cautionsExtra?: string[];
+          oneLine: string;
+        }>(sampled.text);
+
         return {
           content: [
             {
               type: 'text',
               text: JSON.stringify(
                 {
-                  목표: GOAL_NAMES[goal],
-                  주간_운동_횟수: `주 ${trainingFrequency}회`,
-                  관절_상태: hasJointIssue ? '문제 있음 (관절 영양제 포함)' : '정상',
-                  피로_상태: needsRecovery ? '피로 누적 (회복 영양제 포함)' : '양호',
-                  예산_수준: budgetMap[budget],
-                  추천_영양제_개수: supplements.length,
-                  추천_영양제: supplements,
-                  주의사항: warnings,
-                  월_예상_비용: costMap[budget],
+                  ...base,
+                  aiAssist: {
+                    enabled: true,
+                    ok: true,
+                    model: sampled.model,
+                    notes: parsed.ok ? parsed.value : { rawText: sampled.text },
+                  },
                 },
                 null,
                 2
