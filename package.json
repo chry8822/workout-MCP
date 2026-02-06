@@ -21,10 +21,10 @@
     "node": ">=20.11.0"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.20.2",
-    "body-parser": "^2.2.1",
-    "cors": "^2.8.5",
-    "dotenv": "^17.2.3",
+    "@modelcontextprotocol/sdk": "^1.26.0",
+    "body-parser": "^2.2.2",
+    "cors": "^2.8.6",
+    "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "fast-glob": "^3.3.3",
     "zod": "^3.25.0",
